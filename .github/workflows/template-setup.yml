@@ -1,0 +1,121 @@
+name: テンプレート初期化
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 初期化が必要かチェック
+        id: guard
+        run: |
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+          echo "commit_count=$COMMIT_COUNT"
+          if [ "$COMMIT_COUNT" -ne 1 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "コミットが1つではないため、スキップします（count=$COMMIT_COUNT）"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "初期化を実行します"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.skip != 'true'
+        with:
+          node-version: 20
+
+      - name: プロジェクト情報を取得
+        if: steps.guard.outputs.skip != 'true'
+        id: info
+        run: |
+          REPO_NAME="${{ github.event.repository.name }}"
+          REPO_DESC="${{ github.event.repository.description }}"
+          if [ -z "$REPO_DESC" ]; then
+            REPO_DESC="Claude Code で構築されたプロジェクト"
+          fi
+          echo "name=$REPO_NAME" >> "$GITHUB_OUTPUT"
+          echo "desc=$REPO_DESC" >> "$GITHUB_OUTPUT"
+
+      - name: package.json を更新
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          REPO_NAME="${{ steps.info.outputs.name }}"
+          REPO_DESC="${{ steps.info.outputs.desc }}"
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.name = '${REPO_NAME}';
+            pkg.description = '${REPO_DESC}';
+            pkg.version = '0.1.0';
+            delete pkg.keywords;
+            delete pkg.scripts.setup;
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: CLAUDE.md を更新
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          REPO_NAME="${{ steps.info.outputs.name }}"
+          REPO_DESC="${{ steps.info.outputs.desc }}"
+          sed -i "s|^clade_code_project — Claude Code で構築されたプロジェクト|${REPO_NAME} — ${REPO_DESC}|" CLAUDE.md
+
+      - name: README.md を新プロジェクト用に再生成
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          REPO_NAME="${{ steps.info.outputs.name }}"
+          REPO_DESC="${{ steps.info.outputs.desc }}"
+          cat > README.md << EOF
+          # ${REPO_NAME}
+
+          ${REPO_DESC}
+
+          ## セットアップ
+
+          \`\`\`bash
+          npm install
+          \`\`\`
+
+          ## 開発
+
+          \`\`\`bash
+          npm run dev          # 開発サーバー起動
+          npm run build        # 本番ビルド
+          npm run test         # テスト実行
+          npm run test:coverage # カバレッジ付きテスト実行
+          npm run lint         # リントチェック
+          npm run format       # コードフォーマット
+          \`\`\`
+
+          ## License
+
+          MIT
+          EOF
+          # heredocのインデントを除去
+          sed -i 's/^          //' README.md
+
+      - name: 不要なテンプレートファイルを削除
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          rm -f TEMPLATE.md
+          rm -f .github/workflows/template-setup.yml
+
+      - name: 依存関係をインストール
+        if: steps.guard.outputs.skip != 'true'
+        run: npm install
+
+      - name: 変更をコミット＆プッシュ
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: プロジェクト初期化 — ${{ steps.info.outputs.name }}" || echo "変更なし"
+          git push
